@@ -1560,6 +1560,18 @@ namespace winrt::TerminalApp::implementation
         args.Handled(true);
     }
 
+    void TerminalPage::_HandleResetTerminalState(const IInspectable& /*sender*/,
+                                                 const ActionEventArgs& args)
+    {
+        // Recovers a pane whose client exited without cleaning up (alternate
+        // buffer, mouse mode, margins) without erasing the buffer or restarting
+        // the connection (GH#20715)
+        const auto res = _ApplyToActiveControls([](auto& control) {
+            control.HardResetWithoutErase();
+        });
+        args.Handled(res);
+    }
+
     void TerminalPage::_HandleShowContextMenu(const IInspectable& /*sender*/,
                                               const ActionEventArgs& args)
     {

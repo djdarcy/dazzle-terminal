@@ -9,6 +9,7 @@
 #include "handle.h"
 #include "_stream.h"
 #include "../interactivity/inc/ServiceLocator.hpp"
+#include "../terminal/parser/OutputStateMachineEngine.hpp"
 
 using namespace Microsoft::Console;
 using namespace Microsoft::Console::Interactivity;
@@ -133,6 +134,12 @@ try
             _DoClearBuffer(msg.keepCursorRow != 0);
             break;
         }
+        case PtySignal::ResetVtState:
+        {
+            // This signal carries no payload.
+            _DoResetVtState();
+            break;
+        }
         case PtySignal::ResizeWindow:
         {
             ResizeWindowData resizeMsg = { 0 };
@@ -207,6 +214,40 @@ void PtySignalInputThread::_DoClearBuffer(const bool keepCursorRow) const
 
     tb.ClearScrollback(cursor.y, keepCursorRow ? 1 : 0);
     tb.GetCursor().SetPosition({ keepCursorRow ? cursor.x : 0, 0 });
+}
+
+// Method Description:
+// - Resets our VT state without erasing the buffer (the terminal resets its own
+//   copy), so a dead client's modes don't linger into the output that follows.
+void PtySignalInputThread::_DoResetVtState() const
+{
+    LockConsole();
+    auto Unlock = wil::scope_exit([&] { UnlockConsole(); });
+
+    // If the client app hasn't yet connected, there is no state to reset.
+    if (!_consoleConnected)
+    {
+        return;
+    }
+
+    auto& gci = ServiceLocator::LocateGlobals().getConsoleInformation();
+    auto& stateMachine = gci.GetActiveOutputBuffer().GetStateMachine();
+
+    // Drop any sequence the dead client left half-parsed, then do a hard reset without erasing.
+    stateMachine.ResetState();
+    auto& engine = reinterpret_cast<OutputStateMachineEngine&>(stateMachine.Engine());
+    engine.Dispatch().HardReset(false);
+
+    // The terminal reset its copy too, which turned off the modes we rely on. HardReset()
+    // queues a request to re-enable them, but only WriteCharsVT() ever sends those, so
+    // send it ourselves (the same one WriteCharsVT() sends after a RIS).
+    if (auto writer = gci.GetVtWriter())
+    {
+        writer.WriteUTF8(
+            "\x1b[?1004h" // Focus Event Mode
+            "\x1b[?9001h"); // Win32 Input Mode
+        writer.Submit();
+    }
 }
 
 void PtySignalInputThread::_DoShowHide(const ShowHideData& data)

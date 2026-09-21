@@ -366,8 +366,18 @@ namespace winrt::Microsoft::Terminal::Control::implementation
 
     void ControlCore::HardResetWithoutErase()
     {
-        const auto lock = _terminal->LockForWriting();
-        _terminal->HardResetWithoutErase();
+        {
+            const auto lock = _terminal->LockForWriting();
+            _terminal->HardResetWithoutErase();
+        }
+
+        // ConPTY parses the same output we do and keeps its own copy of this
+        // state, most importantly the scrolling margins, so reset that copy
+        // too. Like ClearBuffer, this is done outside the terminal lock.
+        if (const auto conpty{ _connection.try_as<TerminalConnection::ConptyConnection>() })
+        {
+            conpty.Reset();
+        }
     }
 
     bool ControlCore::Initialize(const float actualWidth,
